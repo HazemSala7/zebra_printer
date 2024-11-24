@@ -45,5 +45,13 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>We use Bluetooth to communicate with printers.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>We need Bluetooth to connect to and print invoices.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+    	<string>bluetooth-central</string>
+	</array>
 </dict>
 </plist>

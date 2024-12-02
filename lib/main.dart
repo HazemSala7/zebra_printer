@@ -29,19 +29,25 @@ class _ZebraPrinterPageState extends State<ZebraPrinterPage> {
   BluetoothDevice? connectedDevice;
   bool isScanning = false;
 
-  final String invoiceZPL = """
-^XA
-^CI28
-^CW1,E:TT0003M_.FNT  // Replace with the correct Arabic-supporting font
-^FO50,50^A1N,40,40^FD2e232INVoooCE^FS
-^FO50,100^GB500,3,3^FS
-^FO50,150^A1N,30,30^FDItem                الكمية    السعر     Total^FS
-^FO50,200^A1N,28,28^FDItem A               2       10.00      20.00^FS
-^FO50,250^A1N,28,28^FDItem B               1       15.00      15.00^FS
-^FO50,300^A1N,28,28^FDItem C               3       7.50       22.50^FS
-^LL300
-^XZ
-""";
+  // Test Invoice Items
+  List<InvoiceItem> items = [
+    InvoiceItem(
+        name: 'شرائح صدور دجاج', quantity: 5.0, price: 5.0, total: 25.0),
+    InvoiceItem(name: 'شرائح بانيه', quantity: 10.0, price: 4.0, total: 40.0),
+    InvoiceItem(name: 'شرائح صدر دجاج', quantity: 3.0, price: 4.0, total: 20.0),
+  ];
+
+  String generateInvoice() {
+    return generateInvoiceZPL(
+      invoiceNumber: '241001581',
+      licensedOperator: '562156786',
+      date: '2024-11-11',
+      shopName: 'دورا، المواد الغذائية والتموينية',
+      items: items,
+      discount: 10.0,
+      finalTotal: 148.0,
+    );
+  }
 
   @override
   void dispose() {
@@ -100,6 +106,10 @@ class _ZebraPrinterPageState extends State<ZebraPrinterPage> {
       return;
     }
 
+    String invoiceZPL = generateInvoice();
+    List<String> zplChunks =
+        _chunkZPL(invoiceZPL, 200); // Chunk size of 200 bytes
+
     try {
       List<BluetoothService> services =
           await connectedDevice!.discoverServices();
@@ -107,8 +117,13 @@ class _ZebraPrinterPageState extends State<ZebraPrinterPage> {
         for (BluetoothCharacteristic characteristic
             in service.characteristics) {
           if (characteristic.properties.write) {
-            await characteristic
-                .write(Uint8List.fromList(utf8.encode(invoiceZPL)));
+            print("Writing to characteristic: ${characteristic.uuid}");
+            for (String chunk in zplChunks) {
+              await characteristic
+                  .write(Uint8List.fromList(utf8.encode(chunk)));
+              await Future.delayed(
+                  Duration(milliseconds: 200)); // Delay between chunks
+            }
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text("Invoice printed successfully!")),
             );
@@ -116,11 +131,23 @@ class _ZebraPrinterPageState extends State<ZebraPrinterPage> {
           }
         }
       }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("No writable characteristic found")),
+      );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Error printing invoice: $e")),
       );
     }
+  }
+
+  List<String> _chunkZPL(String zpl, int chunkSize) {
+    List<String> chunks = [];
+    for (int i = 0; i < zpl.length; i += chunkSize) {
+      chunks.add(zpl.substring(
+          i, i + chunkSize > zpl.length ? zpl.length : i + chunkSize));
+    }
+    return chunks;
   }
 
   @override
@@ -170,4 +197,79 @@ class _ZebraPrinterPageState extends State<ZebraPrinterPage> {
       ),
     );
   }
+}
+
+class InvoiceItem {
+  final String name;
+  final double quantity;
+  final double price;
+  final double total;
+
+  InvoiceItem({
+    required this.name,
+    required this.quantity,
+    required this.price,
+    required this.total,
+  });
+}
+
+String generateInvoiceZPL({
+  required String invoiceNumber,
+  required String licensedOperator,
+  required String date,
+  required String shopName,
+  required List<InvoiceItem> items,
+  required double discount,
+  required double finalTotal,
+}) {
+  // final int baseHeight = 380; // Starting height of the items
+  // final int rowHeight = 30; // Height for each row
+  // final int footerHeight = 160; // Space for footer
+  // final int paperHeight = baseHeight +footerHeight;
+
+  final StringBuffer zpl = StringBuffer();
+
+  // Header with Company Name, Invoice Details, and Shop Name
+  zpl.write("""
+  ^XA
+  ^CI28
+  ^CW1,E:TT0003M_.FNT
+  ^LL670 // Dynamic paper length
+
+  // Company Logo and Name
+  ^FO200,30^A1N,50,50^FDEighty Five^FS
+  ^FO180,90^A1N,30,30^FDFOOD PRODUCT^FS
+  ^FO160,130^A1N,30,30^FDMANUFACTURING CO.^FS
+  ^FO20,170^A1N,30,30^FDشركة خمسة وثمانون لصناعة المواد الغذائية^FS
+  ^FO160,210^A1N,30,30^FD0798585111^FS
+  ^FO00,250^GB750,3,3^FS
+
+  // Invoice Details
+  ^FO100,270^A1N,30,30^FDسند قبض رقم: $invoiceNumber^FS
+  ^FO20,320^A1N,30,30^FDOriginal^FS
+  ^FO360,320^A1N,30,30^FDرقم الضريبة^FS
+  ^FO360,360^A1N,30,30^FD$licensedOperator^FS
+  ^FO20,360^A1N,30,30^FDالتاريخ: $date^FS
+  ^FO360,400^A1N,30,30^FDالسيد^FS
+  ^FO20,400^A1N,30,30^FDقهوة برهوم^FS
+  """);
+
+  // Footer with Totals
+  zpl.write("""
+  ^FO360,440^A1N,30,30^FDمجموع النقدي^FS
+  ^FO200,440^A1N,30,30^FD15^FS
+  ^FO360,480^A1N,30,30^FDمجموع الشيكات^FS
+  ^FO200,480^A1N,30,30^FD0^FS
+  ^FO360,520^A1N,30,30^FDخصم^FS
+  ^FO200,520^A1N,30,30^FD${discount.toStringAsFixed(1)}^FS
+  ^FO360,560^A1N,30,30^FDالمجموع النهائي^FS
+  ^FO200,560^A1N,30,30^FD${finalTotal.toStringAsFixed(1)}^FS
+
+  // Representative Number
+  ^FO20,590^A1N,30,30^FDرقم المندوب^FS
+  ^FO20,620^A1N,30,30^FD4-0555555555^FS
+  ^XZ
+  """);
+
+  return zpl.toString();
 }

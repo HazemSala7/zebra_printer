@@ -37,7 +37,7 @@ dependencies:
   usb_serial: ^0.5.2
   flutter_bluetooth_serial: ^0.4.0
   flutter_blue: ^0.8.0
-
+  blue_thermal_printer: ^1.2.3
 dev_dependencies:
   flutter_test:
     sdk: flutter

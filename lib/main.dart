@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:flutter_blue/flutter_blue.dart';
+import 'package:flutter_blue/flutter_blue.dart' as flutterBlue;
+import 'package:blue_thermal_printer/blue_thermal_printer.dart';
 
 void main() {
   runApp(MyApp());
@@ -24,68 +26,67 @@ class ZebraPrinterPage extends StatefulWidget {
 }
 
 class _ZebraPrinterPageState extends State<ZebraPrinterPage> {
-  FlutterBlue flutterBlue = FlutterBlue.instance;
-  List<BluetoothDevice> discoveredDevices = [];
-  BluetoothDevice? connectedDevice;
-  bool isScanning = false;
+  // Common Variables
+  bool isProcessing = false;
+  String platform = Platform.isIOS ? "iOS" : "Android";
 
-  // Test Invoice Items
-  List<InvoiceItem> items = [
-    InvoiceItem(
-        name: 'شرائح صدور دجاج', quantity: 5.0, price: 5.0, total: 25.0),
-    InvoiceItem(name: 'شرائح بانيه', quantity: 10.0, price: 4.0, total: 40.0),
-    InvoiceItem(name: 'شرائح صدر دجاج', quantity: 3.0, price: 4.0, total: 20.0),
+  // iOS Variables
+  flutterBlue.FlutterBlue flutterBlueInstance =
+      flutterBlue.FlutterBlue.instance;
+  flutterBlue.BluetoothDevice? connectedIOSDevice;
+
+  // Android Variables
+  BlueThermalPrinter bluetooth = BlueThermalPrinter.instance;
+  TextEditingController macController = TextEditingController();
+
+  // Sample Invoice Data
+  final List<InvoiceItem> items = [
+    InvoiceItem(name: 'Product A', quantity: 2, price: 15.0, total: 30.0),
+    InvoiceItem(name: 'Product B', quantity: 1, price: 25.0, total: 25.0),
+    InvoiceItem(name: 'Product C', quantity: 3, price: 10.0, total: 30.0),
   ];
 
-  String generateInvoice() {
-    return generateInvoiceZPL(
-      invoiceNumber: '241001581',
-      licensedOperator: '562156786',
-      date: '2024-11-11',
-      shopName: 'دورا، المواد الغذائية والتموينية',
-      items: items,
-      discount: 10.0,
-      finalTotal: 148.0,
-    );
-  }
+  final String invoiceNumber = 'INV123456';
+  final String licensedOperator = '123456789';
+  final String date = '2024-12-04';
+  final String shopName = 'My Shop';
+  final double discount = 10.0;
+  final double finalTotal = 75.0;
 
-  @override
-  void dispose() {
-    if (connectedDevice != null) {
-      connectedDevice!.disconnect();
+  Future<void> _connectToDevice(String macAddress) async {
+    if (platform == "iOS") {
+      await _connectToIOSDevice(macAddress);
+    } else {
+      await _connectToAndroidDevice(macAddress);
     }
-    super.dispose();
   }
 
-  Future<void> _startScanning() async {
+  // Fetch iOS Devices and Connect
+  Future<void> _connectToIOSDevice(String macAddress) async {
     setState(() {
-      isScanning = true;
-      discoveredDevices.clear();
+      isProcessing = true;
     });
 
-    flutterBlue.startScan(timeout: Duration(seconds: 5));
-    flutterBlue.scanResults.listen((results) {
-      setState(() {
-        discoveredDevices = results.map((r) => r.device).toList();
-      });
-    }).onDone(() {
-      setState(() {
-        isScanning = false;
-      });
-    });
-  }
-
-  Future<void> _connectToDevice(BluetoothDevice device) async {
     try {
-      setState(() {
-        isScanning = true;
-      });
-      await device.connect();
-      setState(() {
-        connectedDevice = device;
-      });
+      flutterBlueInstance.startScan(timeout: Duration(seconds: 5));
+      await for (var result in flutterBlueInstance.scanResults) {
+        for (var device in result) {
+          if (device.device.id.id == macAddress) {
+            await device.device.connect();
+            setState(() {
+              connectedIOSDevice = device.device;
+            });
+            flutterBlueInstance.stopScan();
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text("Connected to ${device.device.name}")),
+            );
+            return;
+          }
+        }
+      }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Connected to ${device.name}")),
+        SnackBar(
+            content: Text("Device with MAC address $macAddress not found")),
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -93,36 +94,76 @@ class _ZebraPrinterPageState extends State<ZebraPrinterPage> {
       );
     } finally {
       setState(() {
-        isScanning = false;
+        isProcessing = false;
       });
     }
   }
 
-  Future<void> _printInvoice() async {
-    if (connectedDevice == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("No connected printer")),
+  Future<void> _connectToAndroidDevice(String macAddress) async {
+    setState(() {
+      isProcessing = true;
+    });
+    try {
+      List<BluetoothDevice> devices = await bluetooth.getBondedDevices();
+      BluetoothDevice? targetDevice = devices.firstWhere(
+        (d) => d.address == macAddress,
+        orElse: () => null as BluetoothDevice,
       );
-      return;
+      if (targetDevice != null) {
+        await bluetooth.connect(targetDevice);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Connected to ${targetDevice.name}")),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("No device with MAC address $macAddress")),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error connecting to device: $e")),
+      );
+    } finally {
+      setState(() {
+        isProcessing = false;
+      });
+    }
+  }
+
+  Future<void> _printInvoice(String macAddress) async {
+    if (platform == "iOS") {
+      await _printInvoiceIOS(macAddress);
+    } else {
+      await _printInvoiceAndroid(macAddress);
+    }
+  }
+
+  Future<void> _printInvoiceIOS(String macAddress) async {
+    if (connectedIOSDevice == null) {
+      await _connectToIOSDevice(macAddress);
+      if (connectedIOSDevice == null) return; // Stop if still not connected
     }
 
-    String invoiceZPL = generateInvoice();
-    List<String> zplChunks =
-        _chunkZPL(invoiceZPL, 200); // Chunk size of 200 bytes
+    final invoiceZPL = generateInvoiceZPL(
+      invoiceNumber: invoiceNumber,
+      licensedOperator: licensedOperator,
+      date: date,
+      shopName: shopName,
+      items: items,
+      discount: discount,
+      finalTotal: finalTotal,
+    );
 
     try {
-      List<BluetoothService> services =
-          await connectedDevice!.discoverServices();
-      for (BluetoothService service in services) {
-        for (BluetoothCharacteristic characteristic
-            in service.characteristics) {
+      List<flutterBlue.BluetoothService> services =
+          await connectedIOSDevice!.discoverServices();
+      for (var service in services) {
+        for (var characteristic in service.characteristics) {
           if (characteristic.properties.write) {
-            print("Writing to characteristic: ${characteristic.uuid}");
-            for (String chunk in zplChunks) {
+            for (String chunk in _chunkZPL(invoiceZPL, 200)) {
               await characteristic
                   .write(Uint8List.fromList(utf8.encode(chunk)));
-              await Future.delayed(
-                  Duration(milliseconds: 200)); // Delay between chunks
+              await Future.delayed(Duration(milliseconds: 200));
             }
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(content: Text("Invoice printed successfully!")),
@@ -133,6 +174,31 @@ class _ZebraPrinterPageState extends State<ZebraPrinterPage> {
       }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("No writable characteristic found")),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error printing invoice: $e")),
+      );
+    }
+  }
+
+  Future<void> _printInvoiceAndroid(String macAddress) async {
+    await _connectToAndroidDevice(macAddress);
+
+    final invoiceZPL = generateInvoiceZPL(
+      invoiceNumber: invoiceNumber,
+      licensedOperator: licensedOperator,
+      date: date,
+      shopName: shopName,
+      items: items,
+      discount: discount,
+      finalTotal: finalTotal,
+    );
+
+    try {
+      bluetooth.write(invoiceZPL); // Pass the string directly
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Invoice printed successfully!")),
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -154,43 +220,37 @@ class _ZebraPrinterPageState extends State<ZebraPrinterPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Zebra Printer Invoice'),
+        title: Text('Zebra Printer Invoice ($platform)'),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            ElevatedButton(
-              onPressed: isScanning ? null : _startScanning,
-              child: isScanning
-                  ? CircularProgressIndicator()
-                  : Text("Search for Printers"),
-            ),
-            SizedBox(height: 20),
-            Expanded(
-              child: ListView.builder(
-                itemCount: discoveredDevices.length,
-                itemBuilder: (context, index) {
-                  final device = discoveredDevices[index];
-                  return ListTile(
-                    title: Text(
-                        device.name.isEmpty ? "Unknown Device" : device.name),
-                    subtitle: Text(device.id.toString()),
-                    trailing: ElevatedButton(
-                      onPressed: connectedDevice == device
-                          ? null
-                          : () => _connectToDevice(device),
-                      child: Text(
-                        connectedDevice == device ? "Connected" : "Connect",
-                      ),
-                    ),
-                  );
-                },
+            TextField(
+              controller: macController,
+              decoration: InputDecoration(
+                labelText: 'Enter Printer MAC Address',
+                border: OutlineInputBorder(),
               ),
             ),
+            SizedBox(height: 20),
             ElevatedButton(
-              onPressed: connectedDevice == null ? null : _printInvoice,
-              child: Text("Print Invoice"),
+              onPressed: isProcessing
+                  ? null
+                  : () {
+                      // if (macController.text.isEmpty) {
+                      //   ScaffoldMessenger.of(context).showSnackBar(
+                      //     SnackBar(
+                      //         content: Text(
+                      //             "Please enter the printer MAC address.")),
+                      //   );
+                      //   return;
+                      // }
+                      _printInvoice("C4:D3:6A:AF:6C:14");
+                    },
+              child: isProcessing
+                  ? CircularProgressIndicator()
+                  : Text("Print Invoice"),
             ),
           ],
         ),
@@ -199,6 +259,7 @@ class _ZebraPrinterPageState extends State<ZebraPrinterPage> {
   }
 }
 
+// InvoiceItem class and ZPL generation function
 class InvoiceItem {
   final String name;
   final double quantity;
@@ -267,7 +328,7 @@ String generateInvoiceZPL({
 
   // Representative Number
   ^FO20,590^A1N,30,30^FDرقم المندوب^FS
-  ^FO20,620^A1N,30,30^FD4-0555555555^FS
+  ^FO20,630^A1N,30,30^FD4-0555555555^FS
   ^XZ
   """);
 
